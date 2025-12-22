@@ -21,14 +21,26 @@ uv pip install -r requirements.txt
 ## Usage
 
 ```bash
+# Create new CLIs
 cli new mytool                    # Create in current directory (Tier 2)
 cli new mytool --pai              # Create in PAI bin (Tier 1)
 cli new mytool --standalone       # Create as standalone tool (Tier 3)
+cli new mytool --default run      # With default command (runs when no 
+subcommand)
+cli new mytool -s --deps httpx    # Standalone with extra dependency
+cli new mytool -s --deps "httpx,beautifulsoup4"  # Multiple deps
+
+# Deploy existing CLI to scripts directory (auto-detects dependencies!)
+cli deploy ./weather.py           # Copy to scripts as standalone (Tier 3)
+cli deploy ./weather.py --force   # Overwrite if exists
+cli deploy ./weather.py --move    # Move instead of copy
+cli deploy ./weather.py -n wthr   # Deploy with different name
 ```
 
 ## Commands
 
 - `new` - Create a new CLI from skeleton
+- `deploy` - Deploy existing CLI to scripts directory as standalone (Tier 3)
 - `doc` - Generate documentation (use `cli doc > README.md`)
 
 ## Options
@@ -46,7 +58,8 @@ cli new mytool --standalone       # Create as standalone tool (Tier 3)
 |------|------|----------|----------|
 | 2 (default) | none | Current directory | Project-specific scripts |
 | 1 | `--pai` | `~/.claude/bin/` | PAI infrastructure tools |
-| 3 | `--standalone` | `$PAI_SCRIPTS_DIR/dev.X/` | Reusable tools with own repo |
+| 3 | `--standalone` | `$PAI_SCRIPTS_DIR/dev.X/` | Reusable tools with own repo 
+|
 
 ## Generated CLI Features
 

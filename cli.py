@@ -22,14 +22,25 @@ uv pip install -r requirements.txt
 ## Usage
 
 ```bash
+# Create new CLIs
 cli new mytool                    # Create in current directory (Tier 2)
 cli new mytool --pai              # Create in PAI bin (Tier 1)
 cli new mytool --standalone       # Create as standalone tool (Tier 3)
+cli new mytool --default run      # With default command (runs when no subcommand)
+cli new mytool -s --deps httpx    # Standalone with extra dependency
+cli new mytool -s --deps "httpx,beautifulsoup4"  # Multiple deps
+
+# Deploy existing CLI to scripts directory (auto-detects dependencies!)
+cli deploy ./weather.py           # Copy to scripts as standalone (Tier 3)
+cli deploy ./weather.py --force   # Overwrite if exists
+cli deploy ./weather.py --move    # Move instead of copy
+cli deploy ./weather.py -n wthr   # Deploy with different name
 ```
 
 ## Commands
 
 - `new` - Create a new CLI from skeleton
+- `deploy` - Deploy existing CLI to scripts directory as standalone (Tier 3)
 - `doc` - Generate documentation (use `cli doc > README.md`)
 
 ## Options
@@ -208,6 +219,128 @@ if __name__ == "__main__":
             raise
 '''
 
+SKELETON_WITH_DEFAULT = r'''#!/usr/bin/env python
+# encoding: utf-8
+r"""
+
+{name}
+
+{description}
+
+## Overview
+
+## Usage
+
+    {name_lower} [ARGS] [OPTIONS]
+
+Arguments passed directly are forwarded to the `{default_cmd}` command.
+
+## Commands
+
+- `{default_cmd}` - Default command (runs when no command specified)
+- `doc` - Generate documentation
+
+## Configuration
+
+"""
+
+#
+# Imports
+#
+from rich import print
+from rich import traceback
+from rich import pretty
+from rich.console import Console
+import typer
+
+pretty.install()
+traceback.install()
+console = Console()
+
+app = typer.Typer(
+    add_completion=False,
+    rich_markup_mode="rich",
+    no_args_is_help=False,
+    help="{description}",
+    epilog="To get help about the script, call it with the --help option."
+)
+
+
+#
+# Command: {default_cmd_title}
+#
+@app.command()
+def {default_cmd}(
+    arg: str = typer.Argument("", help="Argument for {default_cmd}"),
+):
+    """
+    Default command - runs when no subcommand specified.
+    """
+    console.print(f"[green]Running {default_cmd} with: {{arg}}[/green]")
+
+
+#
+# Command: Doc
+#
+@app.command()
+def doc(
+    ctx: typer.Context,
+    title: str = typer.Option(None, help="The title of the document"),
+    toc: bool = typer.Option(False, help="Whether to create a table of contents"),
+) -> None:
+    """
+    Re-create the documentation and write it to the output file.
+    """
+    import importlib
+    import importlib.util
+    import sys
+    import os
+    import doc2md
+
+    def import_path(path):
+        module_name = os.path.basename(path).replace("-", "_")
+        spec = importlib.util.spec_from_loader(
+            module_name,
+            importlib.machinery.SourceFileLoader(module_name, path),
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules[module_name] = module
+        return module
+
+    mod_name = os.path.basename(__file__)
+    if mod_name.endswith(".py"):
+        mod_name = mod_name.rsplit(".py", 1)[0]
+    atitle = title or mod_name.replace("_", "-")
+    module = import_path(__file__)
+    docstr = module.__doc__
+    result = doc2md.doc2md(docstr, atitle, toc=toc, min_level=0)
+    print(result)
+
+
+#
+# Main function
+#
+if __name__ == "__main__":
+    import sys
+
+    # Get registered command names dynamically
+    commands = {{cmd.callback.__name__ for cmd in app.registered_commands if cmd.callback}}
+    options = {{"--help", "-h"}}
+
+    # Default to '{default_cmd}' command if first arg isn't a known command or option
+    if len(sys.argv) == 1:
+        sys.argv.append("{default_cmd}")
+    elif sys.argv[1] not in commands | options:
+        sys.argv.insert(1, "{default_cmd}")
+
+    try:
+        app()
+    except SystemExit as e:
+        if e.code != 0:
+            raise
+'''
+
 REQUIREMENTS_TEMPLATE = """typer>=0.15.0
 rich>=13.7.1
 doc2md>=0.1.0
@@ -298,9 +431,93 @@ def make_executable(path: Path) -> None:
     path.chmod(current | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def create_cli_file(path: Path, name: str, description: str) -> None:
+def generate_requirements(extra_deps: Optional[str] = None) -> str:
+    """Generate requirements.txt content with optional extra dependencies."""
+    reqs = REQUIREMENTS_TEMPLATE.strip()
+    if extra_deps:
+        for dep in extra_deps.split(","):
+            dep = dep.strip()
+            if dep:
+                reqs += f"\n{dep}"
+    return reqs + "\n"
+
+
+# Standard library modules (Python 3.9+) - not exhaustive but covers common cases
+STDLIB_MODULES = {
+    "abc", "aifc", "argparse", "array", "ast", "asyncio", "atexit", "base64",
+    "bdb", "binascii", "binhex", "bisect", "builtins", "bz2", "calendar",
+    "cgi", "cgitb", "chunk", "cmath", "cmd", "code", "codecs", "codeop",
+    "collections", "colorsys", "compileall", "concurrent", "configparser",
+    "contextlib", "contextvars", "copy", "copyreg", "cProfile", "crypt",
+    "csv", "ctypes", "curses", "dataclasses", "datetime", "dbm", "decimal",
+    "difflib", "dis", "distutils", "doctest", "email", "encodings", "enum",
+    "errno", "faulthandler", "fcntl", "filecmp", "fileinput", "fnmatch",
+    "fractions", "ftplib", "functools", "gc", "getopt", "getpass", "gettext",
+    "glob", "graphlib", "grp", "gzip", "hashlib", "heapq", "hmac", "html",
+    "http", "imaplib", "imghdr", "imp", "importlib", "inspect", "io",
+    "ipaddress", "itertools", "json", "keyword", "lib2to3", "linecache",
+    "locale", "logging", "lzma", "mailbox", "mailcap", "marshal", "math",
+    "mimetypes", "mmap", "modulefinder", "multiprocessing", "netrc", "nis",
+    "nntplib", "numbers", "operator", "optparse", "os", "ossaudiodev",
+    "pathlib", "pdb", "pickle", "pickletools", "pipes", "pkgutil", "platform",
+    "plistlib", "poplib", "posix", "posixpath", "pprint", "profile", "pstats",
+    "pty", "pwd", "py_compile", "pyclbr", "pydoc", "queue", "quopri", "random",
+    "re", "readline", "reprlib", "resource", "rlcompleter", "runpy", "sched",
+    "secrets", "select", "selectors", "shelve", "shlex", "shutil", "signal",
+    "site", "smtpd", "smtplib", "sndhdr", "socket", "socketserver", "spwd",
+    "sqlite3", "ssl", "stat", "statistics", "string", "stringprep", "struct",
+    "subprocess", "sunau", "symtable", "sys", "sysconfig", "syslog", "tabnanny",
+    "tarfile", "telnetlib", "tempfile", "termios", "test", "textwrap", "threading",
+    "time", "timeit", "tkinter", "token", "tokenize", "trace", "traceback",
+    "tracemalloc", "tty", "turtle", "turtledemo", "types", "typing", "unicodedata",
+    "unittest", "urllib", "uu", "uuid", "venv", "warnings", "wave", "weakref",
+    "webbrowser", "winreg", "winsound", "wsgiref", "xdrlib", "xml", "xmlrpc",
+    "zipapp", "zipfile", "zipimport", "zlib", "_thread",
+}
+
+# Base dependencies already in REQUIREMENTS_TEMPLATE
+BASE_DEPS = {"typer", "rich", "doc2md"}
+
+
+def detect_imports(file_path: Path) -> set[str]:
+    """Detect third-party imports from a Python file."""
+    import ast
+
+    content = file_path.read_text()
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return set()
+
+    imports = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                # Get top-level module
+                module = alias.name.split(".")[0]
+                imports.add(module)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                module = node.module.split(".")[0]
+                imports.add(module)
+
+    # Filter out stdlib and base deps
+    third_party = imports - STDLIB_MODULES - BASE_DEPS
+    return third_party
+
+
+def create_cli_file(path: Path, name: str, description: str, default_cmd: Optional[str] = None) -> None:
     """Create CLI file from skeleton."""
-    content = SKELETON.format(name=name.title(), description=description)
+    if default_cmd:
+        content = SKELETON_WITH_DEFAULT.format(
+            name=name.title(),
+            name_lower=name.lower(),
+            description=description,
+            default_cmd=default_cmd,
+            default_cmd_title=default_cmd.title(),
+        )
+    else:
+        content = SKELETON.format(name=name.title(), description=description)
     path.write_text(content)
     make_executable(path)
 
@@ -315,6 +532,16 @@ def new(
         "A command-line tool",
         "--desc", "-d",
         help="Short description of the CLI"
+    ),
+    default: str = typer.Option(
+        None,
+        "--default",
+        help="Default command name (e.g., 'run', 'get') - runs when no subcommand given"
+    ),
+    deps: str = typer.Option(
+        None,
+        "--deps",
+        help="Additional dependencies (comma-separated, e.g., 'httpx,beautifulsoup4')"
     ),
     pai: bool = typer.Option(
         False,
@@ -337,6 +564,7 @@ def new(
 
     By default, creates in current directory (Tier 2 - Project CLI).
     Use --pai for PAI infrastructure CLIs, --standalone for full repos.
+    Use --default to specify a command that runs when no subcommand is given.
     """
     if pai and standalone:
         console.print("[red]Error:[/red] Cannot use both --pai and --standalone")
@@ -373,7 +601,7 @@ def new(
         tool_dir.mkdir(parents=True, exist_ok=True)
 
         # Create requirements.txt
-        (tool_dir / "requirements.txt").write_text(REQUIREMENTS_TEMPLATE)
+        (tool_dir / "requirements.txt").write_text(generate_requirements(deps))
         console.print(f"[dim]Created:[/dim] {tool_dir / 'requirements.txt'}")
 
         # Create README.md
@@ -390,7 +618,7 @@ def new(
         console.print(f"[dim]Created:[/dim] {tool_dir / '.gitignore'}")
 
     # Create the CLI file
-    create_cli_file(target, name, description)
+    create_cli_file(target, name, description, default)
     console.print(f"[green]Created:[/green] {target}")
 
     # Create symlink for standalone
@@ -408,13 +636,154 @@ def new(
 [cyan]Location:[/cyan] {target}
 [cyan]Run with:[/cyan] {"" if standalone else "./"}{name}{"" if standalone else ".py"} --help
 """
+    if default:
+        summary += f"[cyan]Default cmd:[/cyan] {default} (runs when no subcommand given)\n"
     if standalone:
         summary += f"""
 [cyan]Next steps:[/cyan]
   cd {tool_dir}
   uv pip install -r requirements.txt
+
+[cyan]To push to remote:[/cyan]
+  git add .
+  git commit -m "Initial version"
+  git branch -M main
+  git remote add origin <your-remote-url>
+  git push -u origin main
 """
     console.print(Panel(summary.strip(), title="CLI Created", border_style="green"))
+
+
+#
+# Command: Deploy
+#
+@app.command()
+def deploy(
+    file: Path = typer.Argument(..., help="Path to existing CLI file to deploy"),
+    name: str = typer.Option(
+        None,
+        "--name", "-n",
+        help="Name for the tool (defaults to filename without .py)"
+    ),
+    move: bool = typer.Option(
+        False,
+        "--move", "-m",
+        help="Move instead of copy (deletes original)"
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force", "-f",
+        help="Overwrite if exists"
+    ),
+):
+    """
+    Deploy an existing CLI to scripts directory as standalone tool (Tier 3).
+
+    Takes a local CLI file and sets up full Tier 3 structure:
+    git repo, requirements.txt, README.md, .gitignore, and symlink.
+    """
+    import shutil
+
+    # Resolve the file path
+    file = file.resolve()
+    if not file.exists():
+        console.print(f"[red]Error:[/red] File not found: {file}")
+        raise typer.Exit(code=1)
+
+    if not file.suffix == ".py":
+        console.print(f"[red]Error:[/red] File must be a .py file")
+        raise typer.Exit(code=1)
+
+    # Determine the tool name
+    tool_name = name or file.stem
+
+    # Set up paths
+    tool_dir = SCRIPTS_DIR / f"dev.{tool_name}"
+    target = tool_dir / f"{tool_name}.py"
+    symlink = SCRIPTS_DIR / tool_name
+
+    # Check if exists
+    if tool_dir.exists() and not force:
+        console.print(f"[red]Error:[/red] {tool_dir} already exists. Use --force to overwrite.")
+        raise typer.Exit(code=1)
+
+    # Create tool directory
+    tool_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy or move the CLI file
+    if move:
+        shutil.move(str(file), target)
+        console.print(f"[dim]Moved:[/dim] {file} -> {target}")
+    else:
+        shutil.copy2(file, target)
+        console.print(f"[dim]Copied:[/dim] {file} -> {target}")
+
+    # Ensure executable
+    make_executable(target)
+
+    # Detect third-party imports and create requirements.txt
+    detected_deps = detect_imports(target)
+    deps_str = ",".join(sorted(detected_deps)) if detected_deps else None
+    (tool_dir / "requirements.txt").write_text(generate_requirements(deps_str))
+    if detected_deps:
+        console.print(f"[dim]Created:[/dim] {tool_dir / 'requirements.txt'} (detected: {', '.join(sorted(detected_deps))})")
+    else:
+        console.print(f"[dim]Created:[/dim] {tool_dir / 'requirements.txt'}")
+
+    # Generate README from docstring
+    try:
+        result = subprocess.run(
+            ["python", str(target), "doc"],
+            capture_output=True,
+            text=True,
+            cwd=tool_dir
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            (tool_dir / "README.md").write_text(result.stdout)
+            console.print(f"[dim]Generated:[/dim] {tool_dir / 'README.md'} (from docstring)")
+        else:
+            # Fallback if doc command fails
+            readme = f"# {tool_name}\n\nDeployed CLI tool.\n"
+            (tool_dir / "README.md").write_text(readme)
+            console.print(f"[dim]Created:[/dim] {tool_dir / 'README.md'} (basic)")
+    except Exception:
+        readme = f"# {tool_name}\n\nDeployed CLI tool.\n"
+        (tool_dir / "README.md").write_text(readme)
+        console.print(f"[dim]Created:[/dim] {tool_dir / 'README.md'} (basic)")
+
+    # Initialize git
+    subprocess.run(["git", "init"], cwd=tool_dir, capture_output=True)
+    console.print(f"[dim]Initialized:[/dim] git repository")
+
+    # Create .gitignore
+    (tool_dir / ".gitignore").write_text(GITIGNORE_TEMPLATE)
+    console.print(f"[dim]Created:[/dim] {tool_dir / '.gitignore'}")
+
+    # Create symlink
+    if symlink.exists() or symlink.is_symlink():
+        symlink.unlink()
+    symlink.symlink_to(target)
+    console.print(f"[green]Symlinked:[/green] {symlink} -> {target}")
+
+    # Summary
+    summary = f"""
+[bold]{tool_name}[/bold] deployed as Standalone (Tier 3)
+
+[cyan]Location:[/cyan] {target}
+[cyan]Run with:[/cyan] {tool_name} --help
+
+[cyan]Next steps:[/cyan]
+  cd {tool_dir}
+  uv pip install -r requirements.txt
+
+[cyan]To push to remote:[/cyan]
+  git add .
+  git commit -m "Initial version"
+  git branch -M main
+  git remote add origin <your-remote-url>
+  git push -u origin main
+"""
+    console.print(Panel(summary.strip(), title="CLI Deployed", border_style="green"))
 
 
 #
