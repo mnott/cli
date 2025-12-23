@@ -4,7 +4,7 @@ r"""
 
 CLI Generator
 
-Create Python CLIs using Typer + Rich with a proven skeleton pattern.
+Create Python CLIs using Typer + Rich with modern pyproject.toml packaging.
 
 ## Overview
 
@@ -12,11 +12,14 @@ Generates production-ready Python command-line tools with:
 - Typer for argument parsing and auto-help
 - Rich for pretty output and tracebacks
 - Self-documenting `doc` command via doc2md
+- Modern `pyproject.toml` for dependency management
+- `uv` for fast package management
 
 ## Installation
 
 ```bash
-uv pip install -r requirements.txt
+cd dev.cli
+uv sync
 ```
 
 ## Usage
@@ -50,6 +53,8 @@ cli deploy ./weather.py -n wthr   # Deploy with different name
 | `--desc` | `-d` | Short description of the CLI |
 | `--pai` | `-p` | Create in PAI bin directory (Tier 1) |
 | `--standalone` | `-s` | Create as standalone tool with own repo (Tier 3) |
+| `--deps` | | Extra dependencies (comma-separated) |
+| `--default` | | Default command name (runs when no subcommand given) |
 | `--force` | `-f` | Overwrite if exists |
 
 ## Tiers
@@ -60,6 +65,16 @@ cli deploy ./weather.py -n wthr   # Deploy with different name
 | 1 | `--pai` | `~/.claude/bin/` | PAI infrastructure tools |
 | 3 | `--standalone` | `$PAI_SCRIPTS_DIR/dev.X/` | Reusable tools with own repo |
 
+## Generated Project Structure (Tier 3)
+
+```
+dev.mytool/
+├── pyproject.toml     # Dependencies + entry point
+├── mytool.py          # Main CLI script
+├── README.md          # Generated from docstring
+└── .gitignore
+```
+
 ## Generated CLI Features
 
 Each generated CLI includes:
@@ -67,6 +82,16 @@ Each generated CLI includes:
 - Rich for pretty console output and tracebacks
 - Self-documenting `doc` command
 - Example command to modify or delete
+
+## pyproject.toml
+
+Standalone tools use modern `pyproject.toml` packaging (PEP 517/518/621):
+
+- **Dependencies** defined in `project.dependencies`
+- **Entry point** defined in `project.scripts` (e.g., `mytool = "mytool:app"`)
+- **Build system** uses hatchling
+
+Run with `uv sync && uv run mytool` or install with `uv pip install -e .`
 
 ## Configuration
 
@@ -341,10 +366,24 @@ if __name__ == "__main__":
             raise
 '''
 
-REQUIREMENTS_TEMPLATE = """typer>=0.15.0
-rich>=13.7.1
-doc2md>=0.1.0
-"""
+PYPROJECT_TEMPLATE = '''[project]
+name = "{name}"
+version = "0.1.0"
+description = "{description}"
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.15.0",
+    "rich>=13.7.1",
+    "doc2md>=0.1.0",
+]
+
+[project.scripts]
+{name} = "{name}:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+'''
 
 GITIGNORE_TEMPLATE = """# macOS
 .DS_Store
@@ -406,13 +445,17 @@ README_TEMPLATE = """# {name}
 ## Installation
 
 ```bash
-uv pip install -r requirements.txt
+cd dev.{name}
+uv sync
 ```
 
 ## Usage
 
 ```bash
-./{name}.py --help
+uv run {name} --help
+# Or after installing in dev mode:
+uv pip install -e .
+{name} --help
 ```
 
 ## Commands
@@ -431,15 +474,22 @@ def make_executable(path: Path) -> None:
     path.chmod(current | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def generate_requirements(extra_deps: Optional[str] = None) -> str:
-    """Generate requirements.txt content with optional extra dependencies."""
-    reqs = REQUIREMENTS_TEMPLATE.strip()
+def generate_pyproject(name: str, description: str, extra_deps: Optional[str] = None) -> str:
+    """Generate pyproject.toml content with optional extra dependencies."""
+    content = PYPROJECT_TEMPLATE.format(name=name, description=description)
     if extra_deps:
-        for dep in extra_deps.split(","):
-            dep = dep.strip()
-            if dep:
-                reqs += f"\n{dep}"
-    return reqs + "\n"
+        # Insert extra deps into the dependencies list
+        lines = content.split("\n")
+        new_lines = []
+        for line in lines:
+            new_lines.append(line)
+            if '"doc2md>=0.1.0",' in line:
+                for dep in extra_deps.split(","):
+                    dep = dep.strip()
+                    if dep:
+                        new_lines.append(f'    "{dep}",')
+        content = "\n".join(new_lines)
+    return content
 
 
 # Standard library modules (Python 3.9+) - not exhaustive but covers common cases
@@ -600,9 +650,9 @@ def new(
 
         tool_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create requirements.txt
-        (tool_dir / "requirements.txt").write_text(generate_requirements(deps))
-        console.print(f"[dim]Created:[/dim] {tool_dir / 'requirements.txt'}")
+        # Create pyproject.toml
+        (tool_dir / "pyproject.toml").write_text(generate_pyproject(name, description, deps))
+        console.print(f"[dim]Created:[/dim] {tool_dir / 'pyproject.toml'}")
 
         # Create README.md
         readme_content = README_TEMPLATE.format(name=name, description=description)
@@ -642,7 +692,8 @@ def new(
         summary += f"""
 [cyan]Next steps:[/cyan]
   cd {tool_dir}
-  uv pip install -r requirements.txt
+  uv sync                    # Install dependencies
+  uv run {name} --help       # Run the CLI
 
 [cyan]To push to remote:[/cyan]
   git add .
@@ -721,14 +772,25 @@ def deploy(
     # Ensure executable
     make_executable(target)
 
-    # Detect third-party imports and create requirements.txt
+    # Detect third-party imports and create pyproject.toml
     detected_deps = detect_imports(target)
     deps_str = ",".join(sorted(detected_deps)) if detected_deps else None
-    (tool_dir / "requirements.txt").write_text(generate_requirements(deps_str))
+    # Read description from docstring if available
+    desc = "A command-line tool"
+    try:
+        import ast
+        tree = ast.parse(target.read_text())
+        if ast.get_docstring(tree):
+            first_line = ast.get_docstring(tree).strip().split("\n")[0]
+            if first_line:
+                desc = first_line
+    except Exception:
+        pass
+    (tool_dir / "pyproject.toml").write_text(generate_pyproject(tool_name, desc, deps_str))
     if detected_deps:
-        console.print(f"[dim]Created:[/dim] {tool_dir / 'requirements.txt'} (detected: {', '.join(sorted(detected_deps))})")
+        console.print(f"[dim]Created:[/dim] {tool_dir / 'pyproject.toml'} (detected: {', '.join(sorted(detected_deps))})")
     else:
-        console.print(f"[dim]Created:[/dim] {tool_dir / 'requirements.txt'}")
+        console.print(f"[dim]Created:[/dim] {tool_dir / 'pyproject.toml'}")
 
     # Generate README from docstring
     try:
@@ -770,11 +832,12 @@ def deploy(
 [bold]{tool_name}[/bold] deployed as Standalone (Tier 3)
 
 [cyan]Location:[/cyan] {target}
-[cyan]Run with:[/cyan] {tool_name} --help
+[cyan]Run with:[/cyan] uv run {tool_name} --help
 
 [cyan]Next steps:[/cyan]
   cd {tool_dir}
-  uv pip install -r requirements.txt
+  uv sync                    # Install dependencies
+  uv run {tool_name} --help  # Run the CLI
 
 [cyan]To push to remote:[/cyan]
   git add .

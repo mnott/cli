@@ -1,0 +1,17 @@
+[project]
+name = "cli"
+version = "0.1.0"
+description = "Create Python CLIs using Typer + Rich with modern pyproject.toml packaging"
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.15.0",
+    "rich>=13.7.1",
+    "doc2md>=0.1.0",
+]
+
+[project.scripts]
+cli = "cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

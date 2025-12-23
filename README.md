@@ -3,7 +3,7 @@
 CLI Generator
 
 
-Create Python CLIs using Typer + Rich with a proven skeleton pattern.
+Create Python CLIs using Typer + Rich with modern pyproject.toml packaging.
 
 ## Overview
 
@@ -11,11 +11,14 @@ Generates production-ready Python command-line tools with:
 - Typer for argument parsing and auto-help
 - Rich for pretty output and tracebacks
 - Self-documenting `doc` command via doc2md
+- Modern `pyproject.toml` for dependency management
+- `uv` for fast package management
 
 ## Installation
 
 ```bash
-uv pip install -r requirements.txt
+cd dev.cli
+uv sync
 ```
 
 ## Usage
@@ -50,6 +53,8 @@ cli deploy ./weather.py -n wthr   # Deploy with different name
 | `--desc` | `-d` | Short description of the CLI |
 | `--pai` | `-p` | Create in PAI bin directory (Tier 1) |
 | `--standalone` | `-s` | Create as standalone tool with own repo (Tier 3) |
+| `--deps` | | Extra dependencies (comma-separated) |
+| `--default` | | Default command name (runs when no subcommand given) |
 | `--force` | `-f` | Overwrite if exists |
 
 ## Tiers
@@ -61,6 +66,16 @@ cli deploy ./weather.py -n wthr   # Deploy with different name
 | 3 | `--standalone` | `$PAI_SCRIPTS_DIR/dev.X/` | Reusable tools with own repo 
 |
 
+## Generated Project Structure (Tier 3)
+
+```
+dev.mytool/
+├── pyproject.toml     # Dependencies + entry point
+├── mytool.py          # Main CLI script
+├── README.md          # Generated from docstring
+└── .gitignore
+```
+
 ## Generated CLI Features
 
 Each generated CLI includes:
@@ -68,6 +83,16 @@ Each generated CLI includes:
 - Rich for pretty console output and tracebacks
 - Self-documenting `doc` command
 - Example command to modify or delete
+
+## pyproject.toml
+
+Standalone tools use modern `pyproject.toml` packaging (PEP 517/518/621):
+
+- **Dependencies** defined in `project.dependencies`
+- **Entry point** defined in `project.scripts` (e.g., `mytool = "mytool:app"`)
+- **Build system** uses hatchling
+
+Run with `uv sync && uv run mytool` or install with `uv pip install -e .`
 
 ## Configuration
 
